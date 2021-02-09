@@ -8,7 +8,7 @@ The SHRI project for AI exam with Prof. Nardi
 #### SHRI Project
 #### Student: Francesco Cassini
 #### Sapienza ID number: 785771
-#### GITHUB directory:  https://github.com/francesco-AI/AI-SHRI-Project
+#### GITHUB directory:  https://github.com/francesco-AI/AI-SHRI-Project-2021
 
 
 ## Abstract
