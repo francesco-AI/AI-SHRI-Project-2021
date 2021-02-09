@@ -1,0 +1,49 @@
+import json 
+import socket
+from socket import gethostbyname
+
+
+def create_dictio(file_input):
+    dictionary = {'prova':'ciao'}
+    dictionary = json.dumps(dictionary)
+    with open(file_input, 'w+') as f: 
+        json.dump(dictionary, f, ensure_ascii=False, indent=4)
+        f.close()
+
+
+def saving_function(file_archive, input_object, type_object):
+
+    dictionary_archive = {}
+    with open(file_archive, encoding='utf-8', errors='ignore') as json_data:
+        dictionary_string = json.load(json_data)
+        dictionary_archive = json.loads(dictionary_string)
+
+    if type_object in dictionary_archive:
+        for element in input_object:
+            dictionary_archive[type_object].append(element)
+    else:
+        dictionary_archive[type_object] = input_object
+
+    print(dictionary_archive)
+    dictionary_archive = json.dumps(dictionary_archive)
+    with open(file_archive, 'w+') as f: 
+        json.dump(dictionary_archive, f, ensure_ascii=False, indent=4)
+        f.close()
+
+
+
+def reading_function(file_archive, type_object):
+
+    dictionary_archive = {}
+    with open(file_archive, encoding='utf-8', errors='ignore') as json_data:
+        dictionary_string = json.load(json_data)
+        dictionary_archive = json.loads(dictionary_string)
+
+    if type_object in dictionary_archive:
+        return dictionary_archive[type_object]
+
+
+def ipaddress_function():
+    hostname = socket.gethostname()
+    local_ip = socket.gethostbyname(hostname)
+    return local_ip
