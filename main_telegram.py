@@ -860,7 +860,7 @@ def main() -> None:
     print('**************************************************************')
     print('                  CHATBOT SESSION START                       ')
     print('**************************************************************')
-    updater = Updater("1522170282:AAH6lnHKhcchjL_0lfPGxromcP3hE3QvFMA".format(use_context=True))
+    updater = Updater("TELEGRAM_BOT_TOKEN".format(use_context=True))
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
