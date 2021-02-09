@@ -39,11 +39,15 @@ import librosa
 import soundfile as sf
 import functions_aux as fun_aux
 
-AGENT_REPLY, HEAR_USER, EXECUTE_INTENT, CONFIRM_KEYBOARD, QUESTION_KEYBOARD, RESPONSE_TO_PHOTO, RESPONSE_TO_VOICE, LOCATION, BIO = range(9)
+AGENT_REPLY, HEAR_USER, CONFIRM_KEYBOARD, QUESTION_KEYBOARD, RESPONSE_TO_PHOTO, RESPONSE_TO_VOICE, LOCATION, BIO = range(8)
 
 MODELS_DIR = '.'
 DOWNLOAD_DIR = 'download/'
 ARCHIVE_DIR = 'archive.json'
+DATASET_DIR = 'dataset.json'
+TELEGRAM_KEY = 'telegram_key.txt'
+f = open(TELEGRAM_KEY, "r")
+telegram_key = f.read()
 
 # stanfordnlp.download('it', MODELS_DIR) # Download the Italian models
 # nlp = stanfordnlp.Pipeline(models_dir=MODELS_DIR, treebank='it_isdt')
@@ -64,7 +68,7 @@ User = {'intent':'unknown', 'key':'', 'keyboard': None, 'keyboard_regex': None}
 Global_objects = {'photo': [], 'file': [], 'link':[], 'document': [], 'videonote': [], 'video': [], 'audio':[]}
 Objects_type = ['photo', 'file', 'link', 'document', 'video', 'videonote', 'audio']
 
-Global_variables = {'objects_receiving': 0, 'last_received': None}
+Global_variables = {'objects_receiving': 0, 'last_received': None, 'last_phrase': None, 'save_last_phrase' : False}
 #Global_objects = {'photo':[], 'file':[], 'link':[], 'document':[], 'audio':[], 'video':[], 'text':[]}
 
 tags = {'photo':0, 'file':0, 'link':0, 'document':0, 'audio':0, 'video':0, 'text':0}
@@ -95,8 +99,8 @@ Action_dict = {
 'read': {'params': {'tags': None}, 'exe': 'reading_document','phrase_positive': 'I hope to have found what you want... anyway I\'m ready for a new job...', 'description': 'This function will save docu/photo/link and whatever else, giving them a tag. You can recover them, asking to system'},
 'send': {'params': None, 'exe': 'sending_IPhost','phrase_positive': 'Send IP host machine address', 'description': 'This function will send you the host address of machine on which this telegram bot are running',},
 'command ubuntu terminal': {'params': None, 'exe': 'sending_IPhost','phrase_positive': 'Send IP host machine address', 'description': 'This function will send you the host address of machine on which this telegram bot are running',},
-'password_reseend': {}
-
+'password_reseend': {},
+'select_exe': {'phrase_positive': 'I can\'t decipher this request. Can you help me? Select the action you want I have to perform'},
 }
 
 Params_dict = {
@@ -124,7 +128,9 @@ Frame_dict = {
 'sieve': 'save'
 }
 
-Keyboard_dict =  {'boolean':[[['Yes', 'No']],'^(Yes|No)$'], 'check_alternatives':[[['Yes', 'No', 'Others']],'^(Yes|No|Others)$']  }
+Keyboard_dict =  {'boolean':[[['Yes', 'No']],'^(Yes|No)$'], 
+'check_alternatives':[[['Yes', 'No', 'Others']],'^(Yes|No|Others)$'],
+'select_actions':[[['Save', 'Read', 'Send', 'Find', 'Search']],'^(Save|Read|Send|Find|Search)$'],  }
 
 ########################################################
 #####    AGENT SPEAKS, REPLY, ASK, AND QUERY INPUT
@@ -181,6 +187,24 @@ def agent_confirm_keyboard(update: Update, context: CallbackContext) -> int:
     return CONFIRM_KEYBOARD
 
 
+def agent_confirm_action_keyboard(update: Update, context: CallbackContext) -> int:
+    global Agent, User, Global_objects, Global_variables
+    if Agent['phrase'] != None:
+        phrase = "\"" + str(Agent['phrase']) + "\""
+        print(phrase)
+        speak_simple(phrase)
+        audio_file = open('Agent_reply.wav', 'rb')
+        update.message.reply_audio(audio_file)
+        update.message.reply_text(phrase,reply_markup=ReplyKeyboardRemove())
+        reply_keyboard = User['keyboard']
+        update.message.reply_text('[Select Action to respond]', reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+
+    Agent['phrase'] = Action_dict['query_exe']['phrase_positive']
+    return HEAR_USER
+
+
+
+
 def video_note(update: Update, context: CallbackContext) -> int:
     user = update.message.from_user
     print("Video received")
@@ -222,7 +246,7 @@ def read_usertext(update: Update, context: CallbackContext) -> int:
     if validators.url(update.message.text):
         return url_link(update.message.text, update, context)
     else:
-        action, text = decode_text(update.message.text)
+        action, text = decode_text(update.message.text, update, context)
         if Agent['intent'] == None:
             if action == 'unknown':
                 agent_phrase = Action_dict[str(text)]['phrase_positive'] + Action_dict['query_exe']['phrase_positive']
@@ -233,6 +257,11 @@ def read_usertext(update: Update, context: CallbackContext) -> int:
                 update.message.reply_text(phrase,reply_markup=ReplyKeyboardRemove())
                 return HEAR_USER
             elif action != 'unknown':
+                if Global_variables['save_last_phrase'] ==  True:
+                    print('SONO AARIVATO SELEZIONE AGENTE ACTION')
+                    fun_aux.saving_phrase(DATASET_DIR, Global_variables['last_phrase'], update.message.text)
+                    Global_variables['save_last_phrase'] =  False
+    
                 return agent_main(input_main = action, type_main =  {'input': 'intent', 'type': 'text'}, update = update, context = context)
         else:
             return agent_main(input_main = str(text), type_main = {'input': 'objects', 'type': 'text'}, update = update, context = context)
@@ -267,7 +296,7 @@ def hear_uservoice(update: Update, context: CallbackContext) -> int:
         print("Exception: "+str(e))
 
 
-    action, text = decode_text(comando)
+    action, text = decode_text(comando, update, context)
     if Agent['intent'] == None:
         if action == 'unknown':
             agent_phrase = Action_dict[str(text)]['phrase_positive'] + Action_dict['query_exe']['phrase_positive']
@@ -464,23 +493,34 @@ def video_note(update: Update, context: CallbackContext) -> int:
     return agent_main(input_main= text, type_main = {'input': 'objects', 'type': 'videonote'}, update = update, context = context)
 
 
+# def keyboard(update: Update, context: CallbackContext) -> int:
+#     user = update.message.from_user
+#     print("{} has sended following message : {}".format(user.first_name, update.message.text))
+
+#     confirm = decode_bool_text(update.message.text)
+#     return agent_main(input_main = confirm, type_main = {'input': 'confirmation', 'type': 'boolean'}, update = update, context = context)
+
 
 def keyboard(update: Update, context: CallbackContext) -> int:
+    global Agent, User, Global_objects, Global_variables
+    print('KEYBOARD SELECT ACTION 7777')
     user = update.message.from_user
     print("{} has sended following message : {}".format(user.first_name, update.message.text))
 
-    confirm = decode_bool_text(update.message.text)
-    return agent_main(input_main = confirm, type_main = {'input': 'confirmation', 'type': 'boolean'}, update = update, context = context)
-
+    if update.message.text == 'Yes' or update.message.text == 'No':
+        confirm = update.message.text
+        return agent_main(input_main = confirm, type_main = {'input': 'confirmation', 'type': 'boolean'}, update = update, context = context)
 
 
 ########################################################
 #####    AGENT ANALYZES INTENTS
 ########################################################
 ### SIMPLE ACTION 
-def decode_text(doc, debug_dependencies=True):
+def decode_text(doc, update, context):
+    global Agent, User, Global_objects, Global_variables
+    debug_dependencies=True
     text = nlp(doc)
-    action = extract_from_Intent_dataset(text)
+    action = extract_from_Intent_dataset(doc, text, update, context)
     if debug_dependencies:
         print('************ Phrase Analysis  ************')
         print('Print dependencies')
@@ -490,16 +530,28 @@ def decode_text(doc, debug_dependencies=True):
     return action, text.text
 
 
-def extract_from_Intent_dataset(doc):
+def extract_from_Intent_dataset(doc,text, update, context):
+    global Agent, User, Global_objects, Global_variables
     action = 'unknown'
-    for sent in doc.sentences:
+    for sent in text.sentences:
         for wrd in sent.words:
             print('word analyzer: ', wrd)
             if wrd.lemma in Frame_dict.keys():
                 #action_text = Action_dict[wrd.lemma]
                 action = Frame_dict[wrd.lemma]
                 #action = wrd.lemma
-    return action
+    if action != 'unknown' or (Agent['state'] == 'finding_parameters'):
+        return action
+    elif Agent['intent'] == None:
+        Global_variables['last_phrase'] = doc
+        Agent['phrase'] = Action_dict['select_exe']['phrase_positive']
+        User['keyboard'] = Keyboard_dict['select_actions'][0]
+        User['keyboard_regex'] = Keyboard_dict['select_actions'][1]
+        action = 'save_dataset_for_neuralnetwork'
+        return action 
+
+
+
 
 def decode_bool_text(doc, debug_dependencies=False):
     if doc == 'Yes':
@@ -518,11 +570,15 @@ def agent_main(input_main, type_main, update: Update, context: CallbackContext) 
     #prendi tutto il dictionary di saving
     # verifica di avere tutti i parametri
     if (type_main['input'] == 'intent'):
-        print('***  INPUT RECEIVED =  INTENT  ***')
-        Action = Action_dict[input_main]  # this is a dictionary relative to the intent eg "{'params': {'objects': '', 'tags': ''}, 'exe': 'saving_document', 'phrase_positive': "Let's start Saving function", 'description': 'This function will save docu/photo/link and whatever else, giving them a tag. You can recover them, asking to system'}"
-        Agent['intent'] = input_main      # this is the name of the intent eg "save"
-        Agent['state'] = 'finding_parameters'
-        params = Action['params']
+        if input_main == 'save_dataset_for_neuralnetwork':
+            Global_variables['save_last_phrase'] =  True
+            agent_confirm_action_keyboard(update, context)
+        else:
+            print('***  INPUT RECEIVED =  INTENT  ***')
+            Action = Action_dict[input_main]  # this is a dictionary relative to the intent eg "{'params': {'objects': '', 'tags': ''}, 'exe': 'saving_document', 'phrase_positive': "Let's start Saving function", 'description': 'This function will save docu/photo/link and whatever else, giving them a tag. You can recover them, asking to system'}"
+            Agent['intent'] = input_main      # this is the name of the intent eg "save"
+            Agent['state'] = 'finding_parameters'
+            params = Action['params']
     elif (type_main['input'] == 'objects'):
         print('***  INPUT RECEIVED =  OBJECTS  ***')
         if Agent['intent'] != None:
@@ -868,7 +924,7 @@ def main() -> None:
     print('**************************************************************')
     print('                  CHATBOT SESSION START                       ')
     print('**************************************************************')
-    updater = Updater("INSERT HERE TELEGRAM BOT API".format(use_context=True))
+    updater = Updater(telegram_key.format(use_context=True))
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
@@ -882,8 +938,8 @@ def main() -> None:
             MessageHandler(Filters.photo, photo), CommandHandler('skip', skip_audiophoto), 
             MessageHandler(Filters.voice, hear_uservoice), CommandHandler('skip', skip_audiophoto),
             MessageHandler(Filters.video_note, video_note), CommandHandler('skip', skip_audiophoto),
-            MessageHandler(Filters.video, video), CommandHandler('skip', skip_audiophoto),
-            MessageHandler(Filters.location, location),],
+            MessageHandler(Filters.video, video), CommandHandler('skip', skip_audiophoto)],
+            #MessageHandler(Filters.location, location),],
             CONFIRM_KEYBOARD: [MessageHandler(Filters.regex('^(Yes|No)$'), keyboard)],
             QUESTION_KEYBOARD: [MessageHandler(Filters.regex(str(User['keyboard_regex'])), keyboard)],
             RESPONSE_TO_PHOTO: [MessageHandler(Filters.text, response_to_photo)],
@@ -894,6 +950,7 @@ def main() -> None:
         fallbacks=[CommandHandler('cancel', cancel)],
         allow_reentry = True,
     )
+
 
     dispatcher.add_handler(conv_handler)
 
