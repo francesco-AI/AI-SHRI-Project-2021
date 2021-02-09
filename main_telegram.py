@@ -1,19 +1,16 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-# pylint: disable=W0613, C0116
-# type: ignore[union-attr]
-# This program is dedicated to the public domain under the CC0 license.
-
-"""
-First, a few callback functions are defined. Then, those functions are passed to
-the Dispatcher and registered at their respective places.
-Then, the bot is AGENT_REPLYed and runs until we press Ctrl-C on the command line.
-Usage:
-Example of a bot-user conversation using ConversationHandler.
-Send /AGENT_REPLY to initiate the conversation.
-Press Ctrl-C on the command line or send a signal to the process to stop the
-bot.
-"""
+##############################################################################
+##############################################################################
+########                    SHRI PROJECT                       ###############
+########                    Prof. Nardi                        ###############
+########                                                       ###############
+########            Student: FRANCESCO CASSINI                 ###############
+########            Sapienza ID: 785771                        ###############
+########     Master in Roboics and Artificial Intelligence     ###############
+##############################################################################
+##############################################################################
+########    
+##############################################################################
+##############################################################################
 import os
 import speech_recognition as sr
 from gtts import gTTS
@@ -115,6 +112,17 @@ Params_dict = {
 }
 
 
+Frame_dict = {
+'save': 'save',
+'recover': 'read',
+'read':'read',
+'send': 'send',
+'archive': 'save',
+'load':'read',
+'write': 'save',
+'show': 'read',
+'sieve': 'save'
+}
 
 Keyboard_dict =  {'boolean':[[['Yes', 'No']],'^(Yes|No)$'], 'check_alternatives':[[['Yes', 'No', 'Others']],'^(Yes|No|Others)$']  }
 
@@ -281,7 +289,6 @@ def url_link(text, update, context):
     user = update.message.from_user
     Agent['prev_state'] = Agent['state']
 
-    print('SONO ARIVATO QUI!!!')
     address_url = text
     if Global_variables['last_received'] == 'url_link':
         Global_variables['objects_receiving'] = Global_variables['objects_receiving'] + 1
@@ -488,9 +495,10 @@ def extract_from_Intent_dataset(doc):
     for sent in doc.sentences:
         for wrd in sent.words:
             print('word analyzer: ', wrd)
-            if wrd.lemma in Action_dict.keys():
+            if wrd.lemma in Frame_dict.keys():
                 #action_text = Action_dict[wrd.lemma]
-                action = wrd.lemma
+                action = Frame_dict[wrd.lemma]
+                #action = wrd.lemma
     return action
 
 def decode_bool_text(doc, debug_dependencies=False):
@@ -860,7 +868,7 @@ def main() -> None:
     print('**************************************************************')
     print('                  CHATBOT SESSION START                       ')
     print('**************************************************************')
-    updater = Updater("TELEGRAM_BOT_TOKEN".format(use_context=True))
+    updater = Updater("1522170282:AAH6lnHKhcchjL_0lfPGxromcP3hE3QvFMA".format(use_context=True))
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
