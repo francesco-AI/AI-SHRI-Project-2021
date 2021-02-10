@@ -21,7 +21,7 @@ from ctypes import *
 from contextlib import contextmanager
 import pyaudio
 import playsound
-
+import random
 # import stanfordnlp
 import stanza
 
@@ -38,13 +38,124 @@ import validators
 import librosa
 import soundfile as sf
 import functions_aux as fun_aux
+import torch
+import torchtext
+from torchtext import data
+from torchtext import datasets
+
+import torch.optim as optim
+import torch.nn as nn
+import torch.nn.functional as F
+
+import random
+import spacy
+from torchtext.data.utils import get_tokenizer
+# tokenizer = get_tokenizer("spacy")
+
+
+SEED = 1234
+torch.manual_seed(SEED)
+torch.backends.cudnn.deterministic = True
+TEXT = torchtext.data.Field(tokenize=get_tokenizer("basic_english"))
+LABEL = data.LabelField()
+LANGUAGE = data.LabelField()
+fields = {
+  'text': ('text', TEXT),
+  'label': ('label', LABEL),
+  'language': ('language', LANGUAGE),
+}
+
+train_data, test_data = data.TabularDataset.splits(
+  path = '',
+  train = 'trainset.json',
+  validation = 'testset.json',
+  format = 'json',
+  fields = fields,
+)
+
+MAX_VOCAB_SIZE = 25_000
+
+TEXT.build_vocab(train_data, max_size = MAX_VOCAB_SIZE, vectors = "glove.6B.300d", unk_init = torch.Tensor.normal_)
+LABEL.build_vocab(train_data)
+LANGUAGE.build_vocab(train_data)
+BATCH_SIZE = 64
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+class Intent_model(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, n_filters, filter_sizes, output_dim, 
+                 dropout, pad_idx):
+        
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.convs = nn.ModuleList([
+                                    nn.Conv2d(in_channels = 1, 
+                                              out_channels = n_filters, 
+                                              kernel_size = (fs, embedding_dim)) 
+                                    for fs in filter_sizes
+                                    ])
+        
+        self.fc = nn.Linear(len(filter_sizes) * n_filters, output_dim)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, text):
+        #text = [sent len, batch size]
+        text = text.permute(1, 0)
+        #text = [batch size, sent len]
+        embedded = self.embedding(text)
+        #embedded = [batch size, sent len, emb dim]
+        embedded = embedded.unsqueeze(1)
+        #embedded = [batch size, 1, sent len, emb dim]
+        conved = [F.relu(conv(embedded)).squeeze(3) for conv in self.convs]
+        #conv_n = [batch size, n_filters, sent len - filter_sizes[n]]
+        pooled = [F.max_pool1d(conv, conv.shape[2]).squeeze(2) for conv in conved]
+        #pooled_n = [batch size, n_filters]
+        cat = self.dropout(torch.cat(pooled, dim = 1))
+        #cat = [batch size, n_filters * len(filter_sizes)]
+        return self.fc(cat)
+
+INPUT_DIM = len(TEXT.vocab)
+EMBEDDING_DIM = 300
+N_FILTERS = 100
+FILTER_SIZES = [2,3,4]
+OUTPUT_DIM = len(LABEL.vocab)
+DROPOUT = 0.5
+PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
+
+model = Intent_model(INPUT_DIM, EMBEDDING_DIM, N_FILTERS, FILTER_SIZES, OUTPUT_DIM, DROPOUT, PAD_IDX)
+
+pretrained_embeddings = TEXT.vocab.vectors
+model.embedding.weight.data.copy_(pretrained_embeddings)
+UNK_IDX = TEXT.vocab.stoi[TEXT.unk_token]
+model.embedding.weight.data[UNK_IDX] = torch.zeros(EMBEDDING_DIM)
+model.embedding.weight.data[PAD_IDX] = torch.zeros(EMBEDDING_DIM)
+optimizer = optim.Adam(model.parameters())
+criterion = nn.CrossEntropyLoss()
+
+model = model.to(device)
+criterion = criterion.to(device)
+model.load_state_dict(torch.load('tut5-model.pt'))
+nlp = spacy.load("en_core_web_sm")
+
+def predict_class(model, sentence, min_len = 4):
+    model.eval()
+    tokenized = [tok.text for tok in nlp.tokenizer(sentence)]
+    if len(tokenized) < min_len:
+        tokenized += ['<pad>'] * (min_len - len(tokenized))
+    indexed = [TEXT.vocab.stoi[t] for t in tokenized]
+    tensor = torch.LongTensor(indexed).to(device)
+    tensor = tensor.unsqueeze(1)
+    preds = model(tensor)
+    max_preds = preds.argmax(dim = 1)
+    return max_preds.item()
+
 
 AGENT_REPLY, HEAR_USER, CONFIRM_KEYBOARD, QUESTION_KEYBOARD, RESPONSE_TO_PHOTO, RESPONSE_TO_VOICE, LOCATION, BIO = range(8)
 
 MODELS_DIR = '.'
 DOWNLOAD_DIR = 'download/'
 ARCHIVE_DIR = 'archive.json'
-DATASET_DIR = 'dataset.json'
+TRAINSET_DIR = 'trainset.json'
+TESTSET_DIR = 'testset.json'
+SPLIT_VALUE = 1
 TELEGRAM_KEY = 'telegram_key.txt'
 f = open(TELEGRAM_KEY, "r")
 telegram_key = f.read()
@@ -258,14 +369,13 @@ def read_usertext(update: Update, context: CallbackContext) -> int:
                 return HEAR_USER
             elif action != 'unknown':
                 if Global_variables['save_last_phrase'] ==  True:
-                    fun_aux.saving_phrase(DATASET_DIR, Global_variables['last_phrase'], update.message.text)
+                    dataset_dir = choose_dataset(TRAINSET_DIR,TESTSET_DIR,SPLIT_VALUE)
+                    fun_aux.saving_phrase(dataset_dir, Global_variables['last_phrase'], update.message.text)
                     Global_variables['save_last_phrase'] =  False
     
-                return agent_main(input_main = action, type_main =  {'input': 'intent', 'type': 'text'}, update = update, context = context)
+                return DialogueManager_main(input_main = action, type_main =  {'input': 'intent', 'type': 'text'}, update = update, context = context)
         else:
-            return agent_main(input_main = str(text), type_main = {'input': 'objects', 'type': 'text'}, update = update, context = context)
-
-
+            return DialogueManager_main(input_main = str(text), type_main = {'input': 'objects', 'type': 'text'}, update = update, context = context)
 
     # # url = "https://www.youtube.com/watch?v=il_t1WVLNxk&list=PLqM7alHXFySGqCvcwfqqMrteqWukz9ZoE"
     # # video = pafy.new(url)
@@ -273,8 +383,6 @@ def read_usertext(update: Update, context: CallbackContext) -> int:
     # #video_file = ffmpeg_streaming.input(best)
     # video_file = open('video.mp4', 'rb')
     # update.message.reply_video(video=video_file, supports_streaming=True)
-
-
 
 def hear_uservoice(update: Update, context: CallbackContext) -> int:
     global Agent, User
@@ -306,11 +414,23 @@ def hear_uservoice(update: Update, context: CallbackContext) -> int:
             update.message.reply_text(phrase,reply_markup=ReplyKeyboardRemove())
             return HEAR_USER
         elif action != 'unknown':
-            return agent_main(input_main = action, type_main =  {'input': 'intent', 'type': 'text'}, update = update, context = context)
+                # non serve salvarlo qui, perché la label viene assegnata solo via testo e quindi non passa in questa pipeline
+                # if Global_variables['save_last_phrase'] ==  True:
+                #     fun_aux.saving_phrase(DATASET_DIR, Global_variables['last_phrase'], update.message.text)
+                #     Global_variables['save_last_phrase'] =  False
+    
+            return DialogueManager_main(input_main = action, type_main =  {'input': 'intent', 'type': 'text'}, update = update, context = context)
     else:
-        return agent_main(input_main = str(text), type_main = {'input': 'objects', 'type': 'text'}, update = update, context = context)
+        return DialogueManager_main(input_main = str(text), type_main = {'input': 'objects', 'type': 'text'}, update = update, context = context)
 
-
+def choose_dataset(dir1, dir2, split_value):
+    rand = random.randint(0,9)
+    print(rand)
+    if rand < split_value:
+        dir_c = dir2
+    else:
+        dir_c = dir1
+    return dir_c
 
 def url_link(text, update, context):
     global Agent, User, Global_objects, Global_variables
@@ -350,7 +470,7 @@ def url_link(text, update, context):
         Agent['phrase'] = None
     
     text = address_url
-    return agent_main(input_main= text, type_main = {'input': 'objects', 'type': 'url_link'}, update = update, context = context)
+    return DialogueManager_main(input_main= text, type_main = {'input': 'objects', 'type': 'url_link'}, update = update, context = context)
 
 
 
@@ -395,7 +515,7 @@ def photo(update: Update, context: CallbackContext) -> int:
         Agent['phrase'] = None
     
     text = address_url
-    return agent_main(input_main= text, type_main = {'input': 'objects', 'type': 'photo'}, update = update, context = context)
+    return DialogueManager_main(input_main= text, type_main = {'input': 'objects', 'type': 'photo'}, update = update, context = context)
 
 
 
@@ -442,7 +562,7 @@ def video(update: Update, context: CallbackContext) -> int:
         Agent['phrase'] = None
     
     text = address_url
-    return agent_main(input_main= text, type_main = {'input': 'objects', 'type': 'video'}, update = update, context = context)
+    return DialogueManager_main(input_main= text, type_main = {'input': 'objects', 'type': 'video'}, update = update, context = context)
 
 
 
@@ -489,7 +609,7 @@ def video_note(update: Update, context: CallbackContext) -> int:
         Agent['phrase'] = None
     
     text = address_url
-    return agent_main(input_main= text, type_main = {'input': 'objects', 'type': 'videonote'}, update = update, context = context)
+    return DialogueManager_main(input_main= text, type_main = {'input': 'objects', 'type': 'videonote'}, update = update, context = context)
 
 
 # def keyboard(update: Update, context: CallbackContext) -> int:
@@ -497,7 +617,7 @@ def video_note(update: Update, context: CallbackContext) -> int:
 #     print("{} has sended following message : {}".format(user.first_name, update.message.text))
 
 #     confirm = decode_bool_text(update.message.text)
-#     return agent_main(input_main = confirm, type_main = {'input': 'confirmation', 'type': 'boolean'}, update = update, context = context)
+#     return DialogueManager_main(input_main = confirm, type_main = {'input': 'confirmation', 'type': 'boolean'}, update = update, context = context)
 
 
 def keyboard(update: Update, context: CallbackContext) -> int:
@@ -507,7 +627,7 @@ def keyboard(update: Update, context: CallbackContext) -> int:
 
     if update.message.text == 'Yes' or update.message.text == 'No':
         confirm = update.message.text
-        return agent_main(input_main = confirm, type_main = {'input': 'confirmation', 'type': 'boolean'}, update = update, context = context)
+        return DialogueManager_main(input_main = confirm, type_main = {'input': 'confirmation', 'type': 'boolean'}, update = update, context = context)
 
 
 ########################################################
@@ -562,7 +682,7 @@ def decode_bool_text(doc, debug_dependencies=False):
 #####    AGENT EXECUTES INTENTS
 ########################################################
 ### SIMPLE ACTION 
-def agent_main(input_main, type_main, update: Update, context: CallbackContext) -> int:
+def DialogueManager_main(input_main, type_main, update: Update, context: CallbackContext) -> int:
     global Agent, User, Global_objects, Global_variables
 
     #prendi tutto il dictionary di saving

@@ -30,31 +30,17 @@ from torchtext.data.utils import get_tokenizer
 
 
 SEED = 1234
-train_phase = True
 torch.manual_seed(SEED)
 torch.backends.cudnn.deterministic = True
-
-#https://dzlab.github.io/dltips/en/pytorch/torchtext-datasets/
-# create Field objects
-#{'text': What currency is used in Australia ?, 'label': 'ENTY'}
-# create a dictionary representing the dataset
-
 TEXT = torchtext.data.Field(tokenize=get_tokenizer("basic_english"))
 LABEL = data.LabelField()
 LANGUAGE = data.LabelField()
-#############################################################
-##                     IMPORTANT           ##################
-##  For any filed in FIELDS you have also to build the VOCAB!!!!
-##  Check some rows below and you will find  LANGUAGE.build_vocab(train_data)
-#############################################################
 fields = {
   'text': ('text', TEXT),
   'label': ('label', LABEL),
   'language': ('language', LANGUAGE),
 }
 
-# load the dataset in json format
-#train_data, test_data = datasets.TREC.splits(TEXT, LABEL, fine_grained=False)
 train_data, test_data = data.TabularDataset.splits(
   path = '',
   train = 'trainset.json',
@@ -63,30 +49,13 @@ train_data, test_data = data.TabularDataset.splits(
   fields = fields,
 )
 
-print('************************************')
-print(vars(train_data[-1]))
-print('************************************')
-train_data, valid_data = train_data.split(random_state = random.seed(SEED))
-
-
-
-
 MAX_VOCAB_SIZE = 25_000
 
 TEXT.build_vocab(train_data, max_size = MAX_VOCAB_SIZE, vectors = "glove.6B.300d", unk_init = torch.Tensor.normal_)
 LABEL.build_vocab(train_data)
 LANGUAGE.build_vocab(train_data)
-
-print(LABEL.vocab.stoi)
-
 BATCH_SIZE = 64
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-train_iterator, valid_iterator, test_iterator = data.BucketIterator.splits(
-    (train_data, valid_data, test_data), batch_size = BATCH_SIZE, device = device, sort=False)
-
-
 class Intent_model(nn.Module):
     def __init__(self, vocab_size, embedding_dim, n_filters, filter_sizes, output_dim, 
                  dropout, pad_idx):
@@ -119,8 +88,6 @@ class Intent_model(nn.Module):
         #cat = [batch size, n_filters * len(filter_sizes)]
         return self.fc(cat)
 
-
-
 INPUT_DIM = len(TEXT.vocab)
 EMBEDDING_DIM = 300
 N_FILTERS = 100
@@ -131,119 +98,17 @@ PAD_IDX = TEXT.vocab.stoi[TEXT.pad_token]
 
 model = Intent_model(INPUT_DIM, EMBEDDING_DIM, N_FILTERS, FILTER_SIZES, OUTPUT_DIM, DROPOUT, PAD_IDX)
 
-
-
-
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-print(f'The model has {count_parameters(model):,} trainable parameters')
-
-
 pretrained_embeddings = TEXT.vocab.vectors
-
 model.embedding.weight.data.copy_(pretrained_embeddings)
-
-
 UNK_IDX = TEXT.vocab.stoi[TEXT.unk_token]
-
 model.embedding.weight.data[UNK_IDX] = torch.zeros(EMBEDDING_DIM)
 model.embedding.weight.data[PAD_IDX] = torch.zeros(EMBEDDING_DIM)
-
-
 optimizer = optim.Adam(model.parameters())
 criterion = nn.CrossEntropyLoss()
 
 model = model.to(device)
 criterion = criterion.to(device)
-
-
-
-
-def categorical_accuracy(preds, y):
-    """
-    Returns accuracy per batch, i.e. if you get 8/10 right, this returns 0.8, NOT 8
-    """
-    max_preds = preds.argmax(dim = 1, keepdim = True) # get the index of the max probability
-    correct = max_preds.squeeze(1).eq(y)
-    return correct.sum() / torch.FloatTensor([y.shape[0]])
-
-
-
-def train(model, iterator, optimizer, criterion):
-    
-    epoch_loss = 0
-    epoch_acc = 0
-    
-    model.train()
-    
-    for batch in iterator:
-        optimizer.zero_grad()
-        predictions = model(batch.text)
-        loss = criterion(predictions, batch.label)
-        acc = categorical_accuracy(predictions, batch.label)
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-        epoch_acc += acc.item()
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-
-def evaluate(model, iterator, criterion):
-    
-    epoch_loss = 0
-    epoch_acc = 0
-    
-    model.eval()
-    
-    with torch.no_grad():
-        for batch in iterator:
-            predictions = model(batch.text)
-            loss = criterion(predictions, batch.label)
-            acc = categorical_accuracy(predictions, batch.label)
-            epoch_loss += loss.item()
-            epoch_acc += acc.item()
-    return epoch_loss / len(iterator), epoch_acc / len(iterator)
-
-
-
-import time
-
-def epoch_time(start_time, end_time):
-    elapsed_time = end_time - start_time
-    elapsed_mins = int(elapsed_time / 60)
-    elapsed_secs = int(elapsed_time - (elapsed_mins * 60))
-    return elapsed_mins, elapsed_secs
-
-
-
-
-N_EPOCHS = 5
-
-best_valid_loss = float('inf')
-if train_phase:
-    for epoch in range(N_EPOCHS):
-        start_time = time.time()
-        train_loss, train_acc = train(model, train_iterator, optimizer, criterion)
-        valid_loss, valid_acc = evaluate(model, valid_iterator, criterion)
-        end_time = time.time()
-        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
-        
-        if valid_loss < best_valid_loss:
-            best_valid_loss = valid_loss
-            torch.save(model.state_dict(), 'tut5-model.pt')
-        
-        print(f'Epoch: {epoch+1:02} | Epoch Time: {epoch_mins}m {epoch_secs}s')
-        print(f'\tTrain Loss: {train_loss:.3f} | Train Acc: {train_acc*100:.2f}%')
-        print(f'\t Val. Loss: {valid_loss:.3f} |  Val. Acc: {valid_acc*100:.2f}%')
-
-
-
 model.load_state_dict(torch.load('tut5-model.pt'))
-test_loss, test_acc = evaluate(model, test_iterator, criterion)
-print(f'Test Loss: {test_loss:.3f} | Test Acc: {test_acc*100:.2f}%')
-
-
 nlp = spacy.load("en_core_web_sm")
 
 def predict_class(model, sentence, min_len = 4):

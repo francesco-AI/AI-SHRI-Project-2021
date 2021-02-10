@@ -54,10 +54,37 @@ def reading_function(file_archive, type_object):
         dictionary_archive = json.loads(dictionary_string)
 
     if type_object in dictionary_archive:
-        return dictionary_archive[type_object]
+        return dictionary_archive[type_object][-1]
 
 
 def ipaddress_function():
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
     return local_ip
+
+
+
+def saving_injsonformat_phrase(file_archive, phrase, label):
+    dictionary_archive = {}
+    with open(file_archive, encoding='utf-8', errors='ignore') as json_data:
+        dictionary_string = json.load(json_data)
+        dictionary_archive = json.loads(dictionary_string)
+
+    if not(phrase in dictionary_archive):
+        dictionary_archive[phrase] = label
+
+    print(dictionary_archive)
+    dictionary_archive = json.dumps(dictionary_archive)
+    with open(file_archive, 'w+') as f: 
+        json.dump(dictionary_archive, f, ensure_ascii=False, indent=4)
+        f.close()
+
+
+def saving_phrase(file_archive, phrase, label):
+    f=open(file_archive, "a+")
+
+    text = '{"text": "' + str(phrase) + '", "language": "EN", "label": "' + str(label) + '"}' + '\n'
+    #{"text": "John è andato a farso jgh", "language": "EN", "label": "save"}
+    #dictionary_archive[phrase] = label
+    f.write(text)
+    f.close()
